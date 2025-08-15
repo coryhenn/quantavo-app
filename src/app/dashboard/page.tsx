@@ -64,11 +64,13 @@ export default function DashboardPage() {
       await put("features.tsv.gz", paths.features.url, features);
       await put("matrix.mtx.gz", paths.matrix.url, matrix);
       setUploadedKeys([paths.barcodes.key, paths.features.key, paths.matrix.key]);
-    } catch (e: any) {
-      setError(e?.message ?? "Upload failed. Try again.");
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Upload failed. Try again.";
+      setError(msg);
     } finally {
       setIsUploading(false);
     }
+
   }
 
   return (
