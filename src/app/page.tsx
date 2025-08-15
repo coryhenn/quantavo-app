@@ -2,12 +2,18 @@
 
 import { useState } from "react";
 
-type SignedPath = { key: string; url: string };
+type SignedUpload = { key: string; url: string };
+type SignedUploadMap = {
+  barcodes: SignedUpload;
+  features: SignedUpload;
+  matrix: SignedUpload;
+};
 
 export default function DashboardPage() {
   const [barcodes, setBarcodes] = useState<File | null>(null);
   const [features, setFeatures] = useState<File | null>(null);
   const [matrix, setMatrix] = useState<File | null>(null);
+
   const [isUploading, setIsUploading] = useState(false);
   const [uploadedKeys, setUploadedKeys] = useState<string[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -21,7 +27,7 @@ export default function DashboardPage() {
     setIsUploading(true);
     setUploadedKeys(null);
 
-    // 1) Ask the server for three signed PUT URLs
+    // 1) Ask server for labeled signed URLs
     const res = await fetch("/api/upload", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -30,29 +36,36 @@ export default function DashboardPage() {
         filenames: ["barcodes.tsv.gz", "features.tsv.gz", "matrix.mtx.gz"],
       }),
     });
+
     if (!res.ok) {
       setIsUploading(false);
       setError("Failed to get signed upload URLs");
       return;
     }
-    const { paths } = (await res.json()) as { paths: SignedPath[] };
 
-    // Helper to pick the right signed URL by filename
-    const by = (suffix: string) => paths.find((p) => p.key.endsWith(suffix))!;
+    const data = (await res.json()) as { paths: SignedUploadMap };
+    const paths = data.paths;
 
-    // 2) Upload each file directly to Supabase using signed PUT
-    const put = (url: string, file: File) =>
-      fetch(url, { method: "PUT", body: file });
+    // 2) PUT with per-file error reporting
+    const put = async (label: string, url: string, file: File) => {
+      const resp = await fetch(url, {
+        method: "PUT",
+        body: file,
+        headers: { "Content-Type": "application/octet-stream" },
+      });
+      if (!resp.ok) {
+        const txt = await resp.text().catch(() => "");
+        throw new Error(`${label} upload failed (${resp.status}): ${txt || "no body"}`);
+      }
+    };
 
     try {
-      await Promise.all([
-        put(by("barcodes.tsv.gz").url, barcodes),
-        put(by("features.tsv.gz").url, features),
-        put(by("matrix.mtx.gz").url, matrix),
-      ]);
-      setUploadedKeys(paths.map((p) => p.key));
-    } catch (e) {
-      setError("Upload failed. Try again.");
+      await put("barcodes.tsv.gz", paths.barcodes.url, barcodes);
+      await put("features.tsv.gz", paths.features.url, features);
+      await put("matrix.mtx.gz", paths.matrix.url, matrix);
+      setUploadedKeys([paths.barcodes.key, paths.features.key, paths.matrix.key]);
+    } catch (e: any) {
+      setError(e?.message ?? "Upload failed. Try again.");
     } finally {
       setIsUploading(false);
     }
@@ -67,9 +80,9 @@ export default function DashboardPage() {
       </p>
 
       <div className="space-y-3">
-        <input type="file" accept=".gz" onChange={(e) => setBarcodes(e.target.files?.[0] || null)} />
-        <input type="file" accept=".gz" onChange={(e) => setFeatures(e.target.files?.[0] || null)} />
-        <input type="file" accept=".gz" onChange={(e) => setMatrix(e.target.files?.[0] || null)} />
+        <input type="file" accept=".gz" onChange={(e) => setBarcodes(e.target.files?.[0] ?? null)} />
+        <input type="file" accept=".gz" onChange={(e) => setFeatures(e.target.files?.[0] ?? null)} />
+        <input type="file" accept=".gz" onChange={(e) => setMatrix(e.target.files?.[0] ?? null)} />
       </div>
 
       <button
@@ -91,7 +104,7 @@ export default function DashboardPage() {
             ))}
           </ul>
           <p className="text-sm text-gray-500 mt-2">
-            You can verify these in Supabase → Storage → <b>uploads</b>.
+            Verify in Supabase → Storage → <b>uploads</b>.
           </p>
         </div>
       )}
