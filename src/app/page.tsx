@@ -1,80 +1,101 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
-type RunStatus = "PENDING" | "RUNNING" | "SUCCEEDED" | "FAILED";
+type SignedPath = { key: string; url: string };
 
 export default function DashboardPage() {
-  const [runId, setRunId] = useState<string | null>(null);
-  const [status, setStatus] = useState<RunStatus | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
-  const [artifacts, setArtifacts] = useState<{ umapPngPath?: string | null; markersCsv?: string | null; reportPdfPath?: string | null; } | null>(null);
-  const [isStarting, setIsStarting] = useState(false);
+  const [barcodes, setBarcodes] = useState<File | null>(null);
+  const [features, setFeatures] = useState<File | null>(null);
+  const [matrix, setMatrix] = useState<File | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadedKeys, setUploadedKeys] = useState<string[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  async function startFakeRun() {
-    setIsStarting(true);
-    setStatus(null);
-    setArtifacts(null);
+  async function uploadFiles() {
+    if (!barcodes || !features || !matrix) {
+      setError("Please choose all three files");
+      return;
+    }
+    setError(null);
+    setIsUploading(true);
+    setUploadedKeys(null);
+
+    // 1) Ask the server for three signed PUT URLs
+    const res = await fetch("/api/upload", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        userId: "demo",
+        filenames: ["barcodes.tsv.gz", "features.tsv.gz", "matrix.mtx.gz"],
+      }),
+    });
+    if (!res.ok) {
+      setIsUploading(false);
+      setError("Failed to get signed upload URLs");
+      return;
+    }
+    const { paths } = (await res.json()) as { paths: SignedPath[] };
+
+    // Helper to pick the right signed URL by filename
+    const by = (suffix: string) => paths.find((p) => p.key.endsWith(suffix))!;
+
+    // 2) Upload each file directly to Supabase using signed PUT
+    const put = (url: string, file: File) =>
+      fetch(url, { method: "PUT", body: file });
+
     try {
-      const res = await fetch("/api/run", { method: "POST" });
-      const j = await res.json();
-      setRunId(j.id);
+      await Promise.all([
+        put(by("barcodes.tsv.gz").url, barcodes),
+        put(by("features.tsv.gz").url, features),
+        put(by("matrix.mtx.gz").url, matrix),
+      ]);
+      setUploadedKeys(paths.map((p) => p.key));
+    } catch (e) {
+      setError("Upload failed. Try again.");
     } finally {
-      setIsStarting(false);
+      setIsUploading(false);
     }
   }
 
-  useEffect(() => {
-    if (!runId) return;
-    const t = setInterval(async () => {
-      const r = await fetch(`/api/status?id=${runId}`);
-      if (!r.ok) return;
-      const j = await r.json();
-      setStatus(j.status);
-      setMessage(j.message);
-      setArtifacts({ umapPngPath: j.umapPngPath, markersCsv: j.markersCsv, reportPdfPath: j.reportPdfPath });
-      if (j.status === "SUCCEEDED" || j.status === "FAILED") clearInterval(t);
-    }, 1000);
-    return () => clearInterval(t);
-  }, [runId]);
-
   return (
-    <main className="max-w-2xl mx-auto p-8 space-y-6">
-      <h1 className="text-3xl font-bold">Dashboard</h1>
-      <p className="text-gray-500">Click “Start Run” to simulate a cloud job and poll for status.</p>
+    <main className="max-w-xl mx-auto p-8 space-y-6">
+      <h1 className="text-2xl font-semibold">Upload 10x Files</h1>
+      <p className="text-gray-600">
+        Choose <code>barcodes.tsv.gz</code>, <code>features.tsv.gz</code>, and{" "}
+        <code>matrix.mtx.gz</code>.
+      </p>
+
+      <div className="space-y-3">
+        <input type="file" accept=".gz" onChange={(e) => setBarcodes(e.target.files?.[0] || null)} />
+        <input type="file" accept=".gz" onChange={(e) => setFeatures(e.target.files?.[0] || null)} />
+        <input type="file" accept=".gz" onChange={(e) => setMatrix(e.target.files?.[0] || null)} />
+      </div>
 
       <button
-        onClick={startFakeRun}
-        disabled={isStarting}
-        className="rounded-lg bg-black text-white px-4 py-2 disabled:opacity-50"
+        onClick={uploadFiles}
+        disabled={!barcodes || !features || !matrix || isUploading}
+        className="rounded bg-black text-white px-4 py-2 disabled:opacity-50"
       >
-        {isStarting ? "Starting…" : "Start Run"}
+        {isUploading ? "Uploading…" : "Upload to Supabase"}
       </button>
 
-      {runId && (
-        <div className="rounded-lg border p-4 space-y-2">
-          <div className="text-sm text-gray-500">Run ID: {runId}</div>
-          <div className="font-medium">Status: {status ?? "…"}</div>
-          {message && <div className="text-gray-600">{message}</div>}
+      {error && <div className="text-red-600">{error}</div>}
 
-          {artifacts?.umapPngPath && (
-            <div className="pt-2">
-              <div className="text-sm text-gray-500 mb-2">UMAP (placeholder):</div>
-              {/* Using /next.svg as placeholder image for now */}
-              <img src={artifacts.umapPngPath} alt="UMAP" className="border rounded-lg max-w-full" />
-            </div>
-          )}
-
-          <div className="flex gap-4 pt-2">
-            {artifacts?.markersCsv && (
-              <a className="underline" href={artifacts.markersCsv}>Download markers CSV</a>
-            )}
-            {artifacts?.reportPdfPath && (
-              <a className="underline" href={artifacts.reportPdfPath}>Download PDF</a>
-            )}
-          </div>
+      {uploadedKeys && (
+        <div className="rounded border p-3">
+          <div className="font-medium mb-2">Uploaded objects:</div>
+          <ul className="list-disc pl-6">
+            {uploadedKeys.map((k) => (
+              <li key={k}><code>{k}</code></li>
+            ))}
+          </ul>
+          <p className="text-sm text-gray-500 mt-2">
+            You can verify these in Supabase → Storage → <b>uploads</b>.
+          </p>
         </div>
       )}
     </main>
   );
 }
+
