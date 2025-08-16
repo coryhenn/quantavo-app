@@ -7,37 +7,44 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
+// Only issue signed URLs for the small files (barcodes/features)
+const ALLOWED = new Set(["barcodes.tsv.gz", "features.tsv.gz"]);
+
+type SignedOut = { key: string; url: string };
+
 export async function POST(req: NextRequest) {
   const { userId = "demo", filenames } = await req.json();
-  if (!Array.isArray(filenames) || filenames.length !== 3) {
-    return new Response("expected 3 filenames", { status: 400 });
+
+  if (!Array.isArray(filenames) || filenames.length < 1) {
+    return new Response("filenames[] required", { status: 400 });
+  }
+
+  // Keep only allowed small-file names
+  const wanted = (filenames as string[]).filter((n) => ALLOWED.has(n));
+  if (wanted.length === 0) {
+    return new Response("no allowed filenames", { status: 400 });
   }
 
   const basename = (s: string) => s.split("/").pop()!.split("\\").pop()!;
-  const labels = ["barcodes", "features", "matrix"] as const;
+  const out: Record<"barcodes" | "features", SignedOut> = {} as any;
 
-  const out: Record<(typeof labels)[number], { key: string; url: string }> = {
-    barcodes: { key: "", url: "" },
-    features: { key: "", url: "" },
-    matrix:   { key: "", url: "" },
-  };
-
-  for (let i = 0; i < labels.length; i++) {
-    const name = basename(filenames[i]);
+  for (const raw of wanted) {
+    const name = basename(raw); // "barcodes.tsv.gz" or "features.tsv.gz"
+    const label = name.startsWith("barcodes") ? "barcodes" : "features";
     const key = `${userId}/${crypto.randomUUID()}-${name}`;
+
     const { data, error } = await supabase
-      .storage.from("uploads")
+      .storage
+      .from("uploads")
       .createSignedUploadUrl(key);
 
     if (error) {
       console.error("createSignedUploadUrl error:", error);
       return new Response(error.message, { status: 500 });
     }
-    out[labels[i]] = { key, url: data.signedUrl };
+
+    out[label as "barcodes" | "features"] = { key, url: data.signedUrl };
   }
 
-  console.log("signed upload keys:", Object.values(out).map(o => o.key));
-  return Response.json({ paths: out }); // { barcodes:{key,url}, features:{...}, matrix:{...} }
+  return Response.json({ paths: out });
 }
-
-
