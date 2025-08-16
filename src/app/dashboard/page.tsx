@@ -1,14 +1,12 @@
 "use client";
 
+"use client";
+
 import { useState } from "react";
 import { uploadLargeFile } from "@/lib/multipartClient";
 
 type SignedUpload = { key: string; url: string };
-type SignedUploadMap = {
-  barcodes: SignedUpload;
-  features: SignedUpload;
-  matrix: SignedUpload;
-};
+type SmallPaths = { barcodes: SignedUpload; features: SignedUpload };
 
 export default function DashboardPage() {
   const [barcodes, setBarcodes] = useState<File | null>(null);
@@ -18,6 +16,7 @@ export default function DashboardPage() {
   const [isUploading, setIsUploading] = useState(false);
   const [uploadedKeys, setUploadedKeys] = useState<string[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [progress, setProgress] = useState<number>(0); // optional
 
   async function uploadFiles() {
     if (!barcodes || !features || !matrix) {
@@ -27,60 +26,55 @@ export default function DashboardPage() {
     setError(null);
     setIsUploading(true);
     setUploadedKeys(null);
+    setProgress(0);
 
-    // 1) Ask server for signed URLs for the two small files
-    const res = await fetch("/api/upload", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        userId: "demo",
-        filenames: ["barcodes.tsv.gz", "features.tsv.gz"],
-      }),
-    });
-
-    if (!res.ok) {
-      setIsUploading(false);
-      setError("Failed to get signed upload URLs");
-      return;
-    }
-
-    const data = (await res.json()) as { paths: Omit<SignedUploadMap, "matrix"> };
-    const paths = data.paths;
-
-    const put = async (label: string, url: string, file: File) => {
-      const resp = await fetch(url, {
-        method: "PUT",
-        body: file,
-        headers: { "Content-Type": "application/octet-stream" },
-      });
-      if (!resp.ok) {
-        const txt = await resp.text().catch(() => "");
-        throw new Error(`${label} upload failed (${resp.status}): ${txt || "no body"}`);
-      }
-    };
+    // 1) Create a stable key for the BIG file
+    const matrixKey = `demo/${crypto.randomUUID()}-${matrix.name}`;
 
     try {
-      // 1) Upload small files
-      await put("barcodes.tsv.gz", paths.barcodes.url, barcodes);
-      await put("features.tsv.gz", paths.features.url, features);
-
-      // 2) Upload big file via multipart
-      const matrixKey = `demo/${crypto.randomUUID()}-${matrix.name}`;
+      // 2) Upload BIG file via multipart (8 MB parts avoids 413)
       await uploadLargeFile({
         file: matrix,
         key: matrixKey,
-        partSize: 64 * 1024 * 1024,
+        partSize: 8 * 1024 * 1024, // 8 MB
         concurrency: 4,
-        onProgress: (_up, _total) => {
-          // optional: hook to a progress bar
-        },
+        onProgress: (up, total) => setProgress(Math.floor((up / total) * 100)),
       });
 
-      // 3) Record keys
+      // 3) Ask server for signed URLs for the two small files
+      const res = await fetch("/api/upload", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId: "demo",
+          filenames: ["barcodes.tsv.gz", "features.tsv.gz"],
+        }),
+      });
+      if (!res.ok) {
+        throw new Error(`Failed to get signed upload URLs: ${await res.text()}`);
+      }
+      const { paths } = (await res.json()) as { paths: SmallPaths };
+
+      // 4) PUT the two small files
+      const put = async (label: string, url: string, file: File) => {
+        const resp = await fetch(url, {
+          method: "PUT",
+          body: file,
+          headers: { "Content-Type": "application/octet-stream" },
+        });
+        if (!resp.ok) {
+          const txt = await resp.text().catch(() => "");
+          throw new Error(`${label} upload failed (${resp.status}): ${txt || "no body"}`);
+        }
+      };
+
+      await put("barcodes.tsv.gz", paths.barcodes.url, barcodes);
+      await put("features.tsv.gz", paths.features.url, features);
+
+      // 5) Record keys for all three uploads
       setUploadedKeys([paths.barcodes.key, paths.features.key, matrixKey]);
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "Upload failed. Try again.";
-      setError(msg);
+      setError(e instanceof Error ? e.message : "Upload failed. Try again.");
     } finally {
       setIsUploading(false);
     }
@@ -108,6 +102,10 @@ export default function DashboardPage() {
         {isUploading ? "Uploading…" : "Upload to Supabase"}
       </button>
 
+      {isUploading && (
+        <div className="text-sm text-gray-500">Matrix upload: {progress}%</div>
+      )}
+
       {error && <div className="text-red-600">{error}</div>}
 
       {uploadedKeys && (
@@ -126,4 +124,5 @@ export default function DashboardPage() {
     </main>
   );
 }
+
 
