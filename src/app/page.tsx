@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { uploadLargeFile } from "@/lib/multipartClient";
 
 type SignedUpload = { key: string; url: string };
 type SignedUploadMap = {
@@ -8,6 +9,21 @@ type SignedUploadMap = {
   features: SignedUpload;
   matrix: SignedUpload;
 };
+
+async function uploadMatrix(file: File) {
+  const key = `demo/${crypto.randomUUID()}-${file.name}`;
+  await uploadLargeFile({
+    file,
+    key,
+    partSize: 64 * 1024 * 1024, // tune to bandwidth (16–128MB common)
+    concurrency: 4,
+    onProgress: (up, total) => {
+      // show progress bar if you want
+      // setProgress(Math.round((up/total)*100));
+    },
+  });
+  // store 'key' for your worker later
+}
 
 export default function DashboardPage() {
   const [barcodes, setBarcodes] = useState<File | null>(null);
