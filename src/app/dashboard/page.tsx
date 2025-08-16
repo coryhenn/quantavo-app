@@ -71,7 +71,7 @@ export default function DashboardPage() {
         key: matrixKey,
         partSize: 64 * 1024 * 1024,
         concurrency: 4,
-        onProgress: (up, total) => {
+        onProgress: (_up, _total) => {
           // optional: hook to a progress bar
         },
       });

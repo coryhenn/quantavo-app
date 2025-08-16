@@ -11,6 +11,7 @@ const supabase = createClient(
 const ALLOWED = new Set(["barcodes.tsv.gz", "features.tsv.gz"]);
 
 type SignedOut = { key: string; url: string };
+type SmallLabel = "barcodes" | "features";
 
 export async function POST(req: NextRequest) {
   const { userId = "demo", filenames } = await req.json();
@@ -19,18 +20,19 @@ export async function POST(req: NextRequest) {
     return new Response("filenames[] required", { status: 400 });
   }
 
-  // Keep only allowed small-file names
   const wanted = (filenames as string[]).filter((n) => ALLOWED.has(n));
   if (wanted.length === 0) {
     return new Response("no allowed filenames", { status: 400 });
   }
 
   const basename = (s: string) => s.split("/").pop()!.split("\\").pop()!;
-  const out: Record<"barcodes" | "features", SignedOut> = {} as any;
+
+  // Use Partial so we can fill keys dynamically without `any`
+  const out: Partial<Record<SmallLabel, SignedOut>> = {};
 
   for (const raw of wanted) {
     const name = basename(raw); // "barcodes.tsv.gz" or "features.tsv.gz"
-    const label = name.startsWith("barcodes") ? "barcodes" : "features";
+    const label: SmallLabel = name.startsWith("barcodes") ? "barcodes" : "features";
     const key = `${userId}/${crypto.randomUUID()}-${name}`;
 
     const { data, error } = await supabase
@@ -43,7 +45,7 @@ export async function POST(req: NextRequest) {
       return new Response(error.message, { status: 500 });
     }
 
-    out[label as "barcodes" | "features"] = { key, url: data.signedUrl };
+    out[label] = { key, url: data.signedUrl };
   }
 
   return Response.json({ paths: out });
