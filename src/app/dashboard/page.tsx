@@ -10,21 +10,6 @@ type SignedUploadMap = {
   matrix: SignedUpload;
 };
 
-async function uploadMatrix(file: File) {
-  const key = `demo/${crypto.randomUUID()}-${file.name}`;
-  await uploadLargeFile({
-    file,
-    key,
-    partSize: 64 * 1024 * 1024, // tune to bandwidth (16–128MB common)
-    concurrency: 4,
-    onProgress: (up, total) => {
-      // show progress bar if you want
-      // setProgress(Math.round((up/total)*100));
-    },
-  });
-  // store 'key' for your worker later
-}
-
 export default function DashboardPage() {
   const [barcodes, setBarcodes] = useState<File | null>(null);
   const [features, setFeatures] = useState<File | null>(null);
@@ -43,13 +28,13 @@ export default function DashboardPage() {
     setIsUploading(true);
     setUploadedKeys(null);
 
-    // 1) Ask server for labeled signed URLs
+    // 1) Ask server for signed URLs for the two small files
     const res = await fetch("/api/upload", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         userId: "demo",
-        filenames: ["barcodes.tsv.gz", "features.tsv.gz", "matrix.mtx.gz"],
+        filenames: ["barcodes.tsv.gz", "features.tsv.gz"],
       }),
     });
 
@@ -59,10 +44,9 @@ export default function DashboardPage() {
       return;
     }
 
-    const data = (await res.json()) as { paths: SignedUploadMap };
+    const data = (await res.json()) as { paths: Omit<SignedUploadMap, "matrix"> };
     const paths = data.paths;
 
-    // 2) PUT with per-file error reporting
     const put = async (label: string, url: string, file: File) => {
       const resp = await fetch(url, {
         method: "PUT",
@@ -76,17 +60,30 @@ export default function DashboardPage() {
     };
 
     try {
+      // 1) Upload small files
       await put("barcodes.tsv.gz", paths.barcodes.url, barcodes);
       await put("features.tsv.gz", paths.features.url, features);
-      await put("matrix.mtx.gz", paths.matrix.url, matrix);
-      setUploadedKeys([paths.barcodes.key, paths.features.key, paths.matrix.key]);
+
+      // 2) Upload big file via multipart
+      const matrixKey = `demo/${crypto.randomUUID()}-${matrix.name}`;
+      await uploadLargeFile({
+        file: matrix,
+        key: matrixKey,
+        partSize: 64 * 1024 * 1024,
+        concurrency: 4,
+        onProgress: (up, total) => {
+          // optional: hook to a progress bar
+        },
+      });
+
+      // 3) Record keys
+      setUploadedKeys([paths.barcodes.key, paths.features.key, matrixKey]);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "Upload failed. Try again.";
       setError(msg);
     } finally {
       setIsUploading(false);
     }
-
   }
 
   return (
@@ -129,3 +126,4 @@ export default function DashboardPage() {
     </main>
   );
 }
+
