@@ -1,9 +1,21 @@
 type CompletedPart = { ETag: string; PartNumber: number };
 
+function choosePartSize(totalBytes: number) {
+  // Keep parts between 8 MiB and 128 MiB and under 9,500 parts
+  const min = 8 * 1024 * 1024;
+  const max = 128 * 1024 * 1024;
+  // Target ~6,000–8,000 parts worst-case for giant files
+  let size = Math.ceil(totalBytes / 8000);
+  size = Math.max(size, min);
+  size = Math.min(size, max);
+  // S3 requires >= 5 MiB (we're already above)
+  return size;
+}
+
 export async function uploadLargeFile({
   file,
   key,
-  partSize = 64 * 1024 * 1024,
+  partSize,
   concurrency = 4,
   onProgress,
 }: {
@@ -13,7 +25,9 @@ export async function uploadLargeFile({
   concurrency?: number;
   onProgress?: (uploadedBytes: number, totalBytes: number) => void;
 }) {
-  const stashKey = `mpu:${key}:${file.size}`;
+  const autoSize = partSize ?? choosePartSize(file.size);
+
+  const stashKey = `mpu:${key}:${file.size}:${autoSize}`;
   let { uploadId, parts }: { uploadId: string; parts: CompletedPart[] } =
     JSON.parse(localStorage.getItem(stashKey) || `{"uploadId":"","parts":[]}`);
 
@@ -31,22 +45,19 @@ export async function uploadLargeFile({
   }
 
   const total = file.size;
-  const partLength = (n: number) =>
-    Math.min(partSize, total - (n - 1) * partSize);
+  const partLength = (n: number) => Math.min(autoSize, total - (n - 1) * autoSize);
 
-  let uploaded = parts
-    .map(p => partLength(p.PartNumber))
-    .reduce((a, b) => a + b, 0);
+  let uploaded = parts.map(p => partLength(p.PartNumber)).reduce((a, b) => a + b, 0);
   onProgress?.(uploaded, total);
 
-  const totalParts = Math.ceil(file.size / partSize);
+  const totalParts = Math.ceil(file.size / autoSize);
   const have = new Set(parts.map(p => p.PartNumber));
   const missing: number[] = [];
   for (let i = 1; i <= totalParts; i++) if (!have.has(i)) missing.push(i);
 
   async function uploadPart(partNumber: number) {
-    const start = (partNumber - 1) * partSize;
-    const end = Math.min(start + partSize, file.size);
+    const start = (partNumber - 1) * autoSize;
+    const end = Math.min(start + autoSize, file.size);
     const blob = file.slice(start, end);
 
     const signRes = await fetch("/api/multipart/sign-part", {
@@ -57,14 +68,21 @@ export async function uploadLargeFile({
     if (!signRes.ok) throw new Error(`sign-part failed: ${await signRes.text()}`);
     const sign = await signRes.json();
 
-    const resp = await fetch(sign.url, { method: "PUT", body: blob });
+    // Upload the part
+    const resp = await fetch(sign.url, {
+      method: "PUT",
+      body: blob,
+    });
+
     if (!resp.ok) {
       const txt = await resp.text().catch(() => "");
+      // If we see 413/400, surface a hint for the UI
       throw new Error(`Part ${partNumber} failed (${resp.status}): ${txt || "no body"}`);
     }
 
-    const cleanETag = (resp.headers.get("ETag") || resp.headers.get("etag") || "")
-      .replaceAll('"', "");
+    // Some gateways return lowercase header
+    const etagHeader = resp.headers.get("ETag") || resp.headers.get("etag") || "";
+    const cleanETag = etagHeader.replaceAll('"', "");
     if (!cleanETag) throw new Error(`Missing ETag for part ${partNumber}`);
 
     const idx = parts.findIndex(p => p.PartNumber === partNumber);
@@ -82,8 +100,9 @@ export async function uploadLargeFile({
       const n = queue.shift()!;
       try {
         await uploadPart(n);
-      } catch (_e) {
-        try { await uploadPart(n); } catch (err) { throw err; }
+      } catch (err) {
+        // One retry is fine; beyond that, bubble up
+        try { await uploadPart(n); } catch (err2) { throw err2; }
       }
     }
   });
@@ -101,4 +120,5 @@ export async function uploadLargeFile({
 
   localStorage.removeItem(stashKey);
 }
+
 

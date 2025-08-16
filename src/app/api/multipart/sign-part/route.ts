@@ -3,6 +3,9 @@ import { makeS3 } from "@/lib/s3";
 import { UploadPartCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
+// at the top of each of these files:
+export const runtime = "nodejs";
+
 const BUCKET = "uploads";
 
 export async function POST(req: NextRequest) {

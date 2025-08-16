@@ -1,7 +1,5 @@
 "use client";
 
-"use client";
-
 import { useState } from "react";
 import { uploadLargeFile } from "@/lib/multipartClient";
 
@@ -36,7 +34,7 @@ export default function DashboardPage() {
       await uploadLargeFile({
         file: matrix,
         key: matrixKey,
-        partSize: 8 * 1024 * 1024, // 8 MB
+        // partSize: 16 * 1024 * 1024, // try 16 MiB; omit to auto-pick
         concurrency: 4,
         onProgress: (up, total) => setProgress(Math.floor((up / total) * 100)),
       });

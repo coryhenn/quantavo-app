@@ -1,9 +1,9 @@
+// /app/api/s3/signed-put/route.ts
+export const runtime = "nodejs";
 import { NextRequest } from "next/server";
 import { makeS3 } from "@/lib/s3";
-import { CreateMultipartUploadCommand } from "@aws-sdk/client-s3";
-
-// at the top of each of these files:
-export const runtime = "nodejs";
+import { PutObjectCommand } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 const BUCKET = "uploads";
 
@@ -12,12 +12,11 @@ export async function POST(req: NextRequest) {
   if (!key) return new Response("missing key", { status: 400 });
 
   const s3 = makeS3();
-  const cmd = new CreateMultipartUploadCommand({
+  const cmd = new PutObjectCommand({
     Bucket: BUCKET,
     Key: key,
     ContentType: contentType || "application/octet-stream",
   });
-  const out = await s3.send(cmd);
-  if (!out.UploadId) return new Response("no uploadId", { status: 500 });
-  return Response.json({ uploadId: out.UploadId });
+  const url = await getSignedUrl(s3, cmd, { expiresIn: 600 });
+  return Response.json({ url });
 }
